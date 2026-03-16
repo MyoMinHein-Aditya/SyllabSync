@@ -1,0 +1,181 @@
+{
+  "name": "SyllabSync — Simple (Direct Send)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "daysOfTheWeek": [1],
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "node-trigger",
+      "name": "Every Monday 8AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-800, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const now     = new Date();\nconst weekNum = Math.ceil((now - new Date(now.getFullYear(), 0, 1)) / 604800000);\n\n// ╔══════════════════════════════════════════╗\n// ║         FILL IN YOUR VALUES HERE         ║\n// ╚══════════════════════════════════════════╝\nconst studentEmail  = '';   // e.g. 'student@gmail.com'\nconst courseName    = '';   // e.g. 'CS401 Advance Engineering'\nconst groqApiKey    = '';   // Get free key at https://console.groq.com\n// ════════════════════════════════════════════\n\nreturn [{ json: {\n  weekNum,\n  now:           now.toISOString(),\n  studentEmail,\n  courseName,\n  groqApiKey\n}}];"
+      },
+      "id": "node-setup",
+      "name": "Setup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-580, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Authorization", "value": "=Bearer {{ $json.groqApiKey }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"llama-3.3-70b-versatile\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": \"You are SyllabSync — a warm, encouraging study buddy AI.\\n\\nWrite a weekly study prep email for a student.\\n\\nCourse: {{ $json.courseName }}\\nWeek: {{ $json.weekNum }} of 15\\nDate: {{ $json.now }}\\n\\nRequirements:\\n1. Start with: Hi there!\\n2. Mention Week {{ $json.weekNum }} and course name\\n3. Give exactly 3 numbered study focus areas\\n4. Give 1 productivity tip\\n5. Give 1 motivational closing sentence\\n6. Sign off as: SyllabSync Study Buddy\\n7. 150-200 words, plain text only\"\n  }],\n  \"temperature\": 0.7,\n  \"max_tokens\": 450\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "node-groq-email",
+      "name": "Groq — Write Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-360, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const setup    = $('Setup').first().json;\nconst emailRaw = $json;\n\nconst emailBody = emailRaw?.choices?.[0]?.message?.content?.trim()\n  || 'Hi there!\\n\\nHere is your Week ' + setup.weekNum + ' study prep.\\n\\nStay consistent!\\n\\nSyllabSync Study Buddy';\n\nreturn [{ json: {\n  ...setup,\n  emailBody\n}}];"
+      },
+      "id": "node-store-email",
+      "name": "Store Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-140, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Authorization", "value": "=Bearer {{ $json.groqApiKey }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"llama-3.3-70b-versatile\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": \"Generate exactly 2 Google Calendar study events for Week {{ $json.weekNum }} of {{ $json.courseName }}.\\n\\nReturn ONLY a valid JSON array, no markdown, no explanation:\\n[{\\\"title\\\":\\\"string\\\",\\\"description\\\":\\\"string\\\",\\\"dayOffset\\\":2,\\\"startHour\\\":18,\\\"durationMinutes\\\":90,\\\"colorId\\\":\\\"7\\\"}]\\n\\ncolorId: 7=teal, 11=red, 9=blueberry\\ndayOffset: 1-5 (spread out)\\nstartHour: 17-21 (evenings)\\nReturn ONLY the JSON array.\"\n  }],\n  \"temperature\": 0.2,\n  \"max_tokens\": 300\n}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "node-groq-cal",
+      "name": "Groq — Generate Cal Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [80, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev   = $('Store Email').first().json;\nconst calRaw = $json;\n\nlet events = [];\ntry {\n  const raw     = calRaw?.choices?.[0]?.message?.content || '[]';\n  const cleaned = raw.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/```\\s*$/i,'').trim();\n  const parsed  = JSON.parse(cleaned);\n  events        = Array.isArray(parsed) ? parsed.filter(e => e.title && e.dayOffset && e.startHour) : [];\n} catch(e) { events = []; }\n\nif (!events.length) {\n  events = [\n    { title: 'Week ' + prev.weekNum + ' Study Session', description: 'Review material', dayOffset: 2, startHour: 18, durationMinutes: 90, colorId: '7' },\n    { title: 'Week ' + prev.weekNum + ' Review Block',  description: 'Practice problems', dayOffset: 4, startHour: 19, durationMinutes: 60, colorId: '9' }\n  ];\n}\n\nconst TZ = 'Asia/Kolkata'; // Change to your timezone\nconst calEvents = events.map(ev => {\n  const start = new Date();\n  start.setDate(start.getDate() + Math.max(1, parseInt(ev.dayOffset) || 1));\n  start.setHours(Math.min(22, Math.max(6, parseInt(ev.startHour) || 18)), 0, 0, 0);\n  const end = new Date(start.getTime() + Math.max(30, parseInt(ev.durationMinutes) || 90) * 60000);\n  return {\n    summary:     String(ev.title || 'Study Session').slice(0, 100),\n    description: String(ev.description || '').slice(0, 500),\n    colorId:     String(ev.colorId || '7'),\n    start: { dateTime: start.toISOString(), timeZone: TZ },\n    end:   { dateTime: end.toISOString(),   timeZone: TZ }\n  };\n});\n\nreturn [{ json: {\n  emailBody:    prev.emailBody,\n  calEvents,\n  studentEmail: prev.studentEmail,\n  courseName:   prev.courseName,\n  weekNum:      prev.weekNum,\n  subject:      '📚 Week ' + prev.weekNum + ' Study Prep — ' + prev.courseName\n}}];"
+      },
+      "id": "node-merge",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 0]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.studentEmail }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.emailBody }}",
+        "options": {}
+      },
+      "id": "node-gmail",
+      "name": "Gmail — Send to Student",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [520, -120],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const { calEvents } = $('Merge Results').first().json;\nreturn calEvents.map(e => ({ json: e }));"
+      },
+      "id": "node-split",
+      "name": "Split Cal Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 120]
+    },
+    {
+      "parameters": {
+        "calendar": { "__rl": true, "value": "primary", "mode": "list", "cachedResultName": "primary" },
+        "start": "={{ $json.start.dateTime }}",
+        "end": "={{ $json.end.dateTime }}",
+        "additionalFields": {
+          "summary": "={{ $json.summary }}",
+          "description": "={{ $json.description }}",
+          "colorId": "={{ $json.colorId }}"
+        }
+      },
+      "id": "node-calendar",
+      "name": "Google Calendar — Create Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [740, 120],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Every Monday 8AM": {
+      "main": [[{ "node": "Setup", "type": "main", "index": 0 }]]
+    },
+    "Setup": {
+      "main": [[{ "node": "Groq — Write Email", "type": "main", "index": 0 }]]
+    },
+    "Groq — Write Email": {
+      "main": [[{ "node": "Store Email", "type": "main", "index": 0 }]]
+    },
+    "Store Email": {
+      "main": [[{ "node": "Groq — Generate Cal Events", "type": "main", "index": 0 }]]
+    },
+    "Groq — Generate Cal Events": {
+      "main": [[{ "node": "Merge Results", "type": "main", "index": 0 }]]
+    },
+    "Merge Results": {
+      "main": [
+        [{ "node": "Gmail — Send to Student", "type": "main", "index": 0 }],
+        [{ "node": "Split Cal Events", "type": "main", "index": 0 }]
+      ]
+    },
+    "Split Cal Events": {
+      "main": [[{ "node": "Google Calendar — Create Event", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
